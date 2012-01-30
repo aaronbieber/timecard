@@ -1,0 +1,55 @@
+#!/usr/bin/env python
+
+import sys, os, re
+
+try:
+  import argparse
+except ImportError:
+  print "You need the argparse library to run timecard."
+
+def getargs():
+  """ Get the command line arguments.
+  """
+  parser = argparse.ArgumentParser(description = 'Timecard calculates task statistics using a Quicktask list.')
+  parser.add_argument('-f', '--file', dest='file', help = 'A Quicktask file (filename or a path to the file).')
+
+  args = parser.parse_args()
+  if not args.file:
+    parser.print_help()
+    sys.exit(1)
+
+  return args
+
+def indent(string):
+  if re.match('^(\s*)', string):
+    m = re.match('^(\s*)', string)
+    return len(m.group(1))
+
+def main():
+  """ The main module for the script.
+  """
+  # Get the arguments.
+  args = getargs()
+
+  # Check for the file.
+  if not os.path.exists(args.file):
+    print "The Quicktask file doesn't exist!"
+    sys.exit(1)
+
+  with open(args.file) as f:
+    content = f.readlines()
+
+  tasklist = []
+  level = 0
+  for line in content:
+    l = line.rstrip("\n").rstrip("\r")
+    new_level = indent(l)
+
+    if new_level > level
+      # We have encountered a sub-item.
+
+    # This is our new level.
+    level = new_level
+
+if __name__ == "__main__":
+  main()
