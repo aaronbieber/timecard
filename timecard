@@ -1,17 +1,30 @@
 #!/usr/bin/env python
 
-import sys, os, re
+import sys, os, re, time, datetime, copy
 
 try:
   import argparse
 except ImportError:
   print "You need the argparse library to run timecard."
+  print "Try 'pip install argparse'"
+  sys.exit(1)
+
+try:
+  import dateutil.parser
+except ImportError:
+  print "You need python-dateutil to run timecard."
+  print "For Python >= 3.0, try 'pip install python-dateutil'"
+  print "For Python < 3.0, try 'pip install python-dateutil==1.5'"
+  sys.exit(1)
 
 def getargs():
   """ Get the command line arguments.
   """
   parser = argparse.ArgumentParser(description = 'Timecard calculates task statistics using a Quicktask list.')
   parser.add_argument('-f', '--file', dest='file', help = 'A Quicktask file (filename or a path to the file).')
+  parser.add_argument('-d', '--done', dest='done', action='store_true', help = 'Only calculate the duration of tasks marked as DONE.')
+  parser.add_argument('-z', '--hide-zeros', dest='zero', action='store_true', help = 'Only output tasks with durations greater than zero.')
+  parser.add_argument('-s', '--simple-tasks', dest='simple', action='store_true', help = 'Do not output individual task intervals, only output the total task duration.')
 
   args = parser.parse_args()
   if not args.file:
@@ -24,6 +37,20 @@ def indent(string):
   if re.match('^(\s*)', string):
     m = re.match('^(\s*)', string)
     return len(m.group(1))
+
+def store(content, depth=0):
+  struct = []
+  while len(content):
+    line = content.pop().rstrip("\n").rstrip("\r")
+    #new_depth = indent(line)
+    if len(content) > 1 and indent(content[len(content)-1].rstrip("\n").rstrip("\r")) > new_depth:
+      # If the next line is going to be a child, we must recurse.
+      struct.append({ 'text': line.strip(), 'tasks': store(content, new_depth), 'depth': new_depth })
+    else:
+      # Otherwise, append as a sibling on the current structure.
+      struct.append({ 'text': line.strip(), 'depth': new_depth })
+
+  return struct
 
 def main():
   """ The main module for the script.
@@ -39,17 +66,89 @@ def main():
   with open(args.file) as f:
     content = f.readlines()
 
+  tasks = []
+  content.reverse()
+  print repr(store(content))
+
+  sys.exit(0)
+
   tasklist = []
   level = 0
+  task_data = {}
+  lines = 0
   for line in content:
     l = line.rstrip("\n").rstrip("\r")
     new_level = indent(l)
 
-    if new_level > level
-      # We have encountered a sub-item.
+    #print str(new_level) + " " + l
+
+    # Absorb the current line and figure out what it is.
+    if re.match('^\s*?- ', l):
+      #print "TASK LINE MATCH"
+      # This is a task line
+
+      # Append the task to the list
+      if len(task_data):
+        #print "Appending " + repr(task_data)
+        tasklist.append(copy.deepcopy(task_data))
+        #print repr(tasklist)
+
+      task_data['level'] = new_level
+      task_data['intervals'] = []
+      task_data['text'] = re.search('^\s*?- (.*)$', l).group(1).strip()
+    elif re.match('^\s*?\* ', l):
+      #print "NOTE LINE MATCH"
+      # This is a note line
+      #item_value = re.search('^\s*?\* (.*)$', l).group(1)
+
+      # Make a note of any dates or times, as that is the most important part.
+      if re.match('.*?Added \[', l):
+        added = re.search('.*?Added \[(.*?)\]', l).group(1)
+        #print "ADDED TIME MATCH: " + added
+        task_data['added'] = time.mktime(dateutil.parser.parse(added).timetuple())
+
+      if re.match('.*?Start \[... \d{4}-\d\d-\d\d] \[\d\d:\d\d\]', l):
+        interval = {}
+        start = re.search('.*?Start \[(... \d{4}-\d\d-\d\d)\] \[(\d\d:\d\d)\]', l)
+        #print "INTERVAL START MATCH " + start.group(1) + " " + start.group(2)
+        interval['start'] = time.mktime(dateutil.parser.parse(start.group(1)+" "+start.group(2)).timetuple())
+
+        if re.match('.*?Start.*?, end \[', l):
+          end = re.search('.*Start.*?, end \[(.*?)\]', l)
+          #print "INTERVAL END MATCH " + end.group(1)
+          interval['end'] = time.mktime(dateutil.parser.parse(start.group(1)+" "+end.group(1)).timetuple())
+
+        if len(interval):
+          task_data['intervals'].append(interval.copy())
+    else:
+      if task_data.has_key('text'):
+        task_data['text'] += ' '+l.strip()
 
     # This is our new level.
     level = new_level
+
+  # Now loop over the parsed tasks and calculate stats.
+  list_total_duration = 0
+  for task in tasklist:
+    if task.has_key('intervals'):
+      total_duration = 0
+      task_string = ''
+      for interval in task['intervals']:
+        if(interval.has_key('start') and interval.has_key('end')):
+          total_duration += int(interval['end'] - interval['start'])
+          task_string += \
+                (' ' * task['level']) + '   ' + \
+                time.strftime('%x %X', time.localtime(interval['start'])) + ' - ' + \
+                time.strftime('%X', time.localtime(interval['end'])) + ', duration ' + \
+                str(datetime.timedelta(seconds=(interval['end'] - interval['start']))) + "\n"
+
+      list_total_duration += total_duration
+      if total_duration > 0 or not args.zero:
+        print ('-' * task['level']) + ' ' + task['text']
+        if not args.simple:
+          print task_string.rstrip("\n")
+        print (' ' * task['level']) + '   TOTAL DURATION: ' + str(datetime.timedelta(seconds=total_duration))
+  print 'LIST TOTAL DURATION: ' + str(datetime.timedelta(seconds=list_total_duration))
 
 if __name__ == "__main__":
   main()
