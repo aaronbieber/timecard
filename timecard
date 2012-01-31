@@ -30,14 +30,23 @@ except ImportError:
   print "For Python < 3.0, try 'pip install python-dateutil==1.5'"
   sys.exit(1)
 
+# Globals
+args = {}
+
 def getargs():
   """ Get the command line arguments.
   """
   parser = argparse.ArgumentParser(description = 'Timecard calculates task statistics using a Quicktask list.')
-  parser.add_argument('-f', '--file', dest='file', help = 'A Quicktask file (filename or a path to the file).')
-  parser.add_argument('-d', '--done', dest='done', action='store_true', help = 'Only calculate the duration of tasks marked as DONE.')
-  parser.add_argument('-z', '--hide-zeros', dest='zero', action='store_true', help = 'Only output tasks with durations greater than zero.')
-  parser.add_argument('-t', '--totals-only', dest='totals', action='store_true', help = 'When a task has sub-tasks, suppress the display of the task\'s own duration and display only the total duration of all sub-tasks.')
+  parser.add_argument('-f', '--file', dest='file',
+                      help = 'A Quicktask file (filename or a path to the file).')
+  parser.add_argument('-d', '--done', dest='done', action='store_true', 
+                      help = 'Only calculate the duration of tasks marked as DONE.')
+  parser.add_argument('-z', '--hide-zeros', dest='zero', action='store_true', 
+                      help = 'Only output tasks with durations greater than zero.')
+  parser.add_argument('-t', '--totals-only', dest='totals', action='store_true', 
+                      help = 'When a task has sub-tasks, suppress the display of the task\'s own duration and display only the total duration of all sub-tasks.')
+  parser.add_argument('--debug', dest='debug', action='store_true',
+                      help = 'Display (occasionally) helpful debugging information.')
 
   args = parser.parse_args()
   if not args.file:
@@ -51,17 +60,23 @@ def indent(string):
     m = re.match('^(\s*)', string)
     return len(m.group(1))
 
-def store(content, depth=0):
+def debug(message):
+  if args.debug:
+    print message
+
+def store(content, depth=0, linenum=0):
   struct = []
   task = {}
 
   while len(content):
+    linenum += 1
     # Non-destructive line value
     line = content[len(content)-1].rstrip("\n").rstrip("\r")
+    debug("%02i  %s" % (linenum, line.strip()))
 
-    # Skip comments
+    # Skip comments and blank lines
     if re.match('^\s*#', line) or not len(line):
-      #print "  ~ Skip comment or blank"
+      debug("  ~ Skip comment or blank")
       content.pop()
       continue
 
@@ -74,9 +89,17 @@ def store(content, depth=0):
       depth = indent(line)
       t = re.search('^\s*- (.*)$', line)
       task['text'] = t.group(1)
+      debug("    - New task line: %s" % task['text'])
+    elif re.match('^.*:$', line):
+      task = {'done': False}
+      depth = indent(line)
+      t = re.search('^\s*(.*):$', line)
+      task['text'] = t.group(1)
+      debug("    : New section task: %s" % task['text'])
     elif re.match('^\s*\* Added \[... \d{4}-\d\d-\d\d\]', line):
       added = re.search('.*?Added \[(.*?)\]', line).group(1)
       task['added'] = time.mktime(dateutil.parser.parse(added).timetuple())
+      debug("    * Added: %i" % task['added'])
     elif re.match('^\s*\* Start \[... \d{4}-\d\d-\d\d\] \[\d\d:\d\d\]', line):
       interval = {}
       start = re.search('^\s*\* Start \[(... \d{4}-\d\d-\d\d)\] \[(\d\d:\d\d)\]', line)
@@ -87,13 +110,16 @@ def store(content, depth=0):
       if not task.has_key('intervals'):
         task['intervals'] = []
       task['intervals'].append(interval)
+      debug("    * Interval: %s" % repr(interval))
     elif re.match('^\s*\* DONE', line):
       task['done'] = True
+      debug("    * DONE")
     elif not re.match('^\s*\* ', line) \
          and task.has_key('text') \
          and len(task['text']) \
          and indent(line) == depth + 2:
       task['text'] += line.strip()
+      debug("    - Additional task text: %s" % line.strip())
 
     # Grab the next line
     if len(content):
@@ -105,23 +131,30 @@ def store(content, depth=0):
       continue
 
     # If the next line is at this indent or deeper AND it is a TASK, we will recurse.
-    if re.match('^\s*- ', next_line):
-      #print "*** The next line is a task"
+    if re.match('^\s*- ', next_line) or re.match('^.*:$', next_line):
+      debug("*** The next line is a task")
       if indent(next_line) > depth:
         # If the next line is going to be a child, we must recurse.
-        child_tasks = store(content, indent(next_line)) 
+        debug("*** The next line is a child, descending to next function call from line %i." % linenum)
+        child_tasks, linenum = store(content, indent(next_line), linenum) 
+        debug("*** Returned from call at line %i with %i tasks." % (linenum, len(child_tasks)))
         task['tasks'] = copy.deepcopy(child_tasks)
+        debug("*** Appending subtree.")
         struct.append(copy.deepcopy(task))
       elif indent(next_line) < depth:
         # If the indent is less than where we were called from, return to the previous iteration.
-        return struct
+        debug("*** Next line is a parent, return from %i." % linenum)
+        struct.append(copy.deepcopy(task))
+        return [struct, linenum]
       else:
         # Otherwise, append as a sibling on the current structure.
         struct.append(copy.deepcopy(task))
+        debug("*** Next line is a sibling (%i), append current item." % depth)
     elif indent(next_line) < depth:
       struct.append(copy.deepcopy(task))
+      debug("*** Next line is a parent (non-task), commit the current item.")
 
-  return struct
+  return [struct, linenum]
 
 def stats(tasks, total=0):
   total_duration = 0
@@ -159,6 +192,7 @@ def main():
   """ The main module for the script.
   """
   # Get the arguments.
+  global args
   args = getargs()
 
   # Check for the file.
@@ -170,7 +204,7 @@ def main():
     content = f.readlines()
 
   content.reverse()
-  tasks = store(content)
+  tasks, linenum = store(content)
   stats(tasks)
   render(tasks, args)
 
