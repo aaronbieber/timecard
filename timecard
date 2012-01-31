@@ -129,7 +129,8 @@ def stats(tasks, total=0):
     task_duration = 0
     if task.has_key('intervals'):
       for interval in task['intervals']:
-        task_duration += int(interval['end'] - interval['start'])
+        if(interval.has_key('start') and interval.has_key('end')):
+          task_duration += int(interval['end'] - interval['start'])
       total_duration += task_duration
     task['duration'] = task_duration
     if task.has_key('tasks') and len(task['tasks']):
@@ -140,7 +141,8 @@ def stats(tasks, total=0):
 def render(tasks, args, depth=0):
   for task in tasks:
     if (not task['done'] and args.done) or \
-       args.zero and (not task.has_key('duration') or not task['duration']):
+       args.zero and ((not task.has_key('duration') or not task['duration']) and \
+                      (not task.has_key('child_duration') or not task['child_duration'])):
       continue
     text = textwrap.wrap(task['text'], 75, initial_indent='- ', subsequent_indent='  ')
     for line in text:
