@@ -132,42 +132,55 @@ def store(content, depth=0, linenum=0):
 
     # If the next line is at this indent or deeper AND it is a TASK, we will recurse.
     if re.match('^\s*- ', next_line) or re.match('^.*:$', next_line):
-      debug("*** The next line is a task")
+      debug("*** The next line is a task (%i)" % depth)
       if indent(next_line) > depth:
         # If the next line is going to be a child, we must recurse.
-        debug("*** The next line is a child, descending to next function call from line %i." % linenum)
+        debug("*** The next line is a child, descending to next function call from line %i. (%i)" % (linenum, depth))
         child_tasks, linenum = store(content, indent(next_line), linenum) 
-        debug("*** Returned from call at line %i with %i tasks." % (linenum, len(child_tasks)))
+        debug("*** Returned from call at line %i with %i tasks. (%i)" % (linenum, len(child_tasks), depth))
         task['tasks'] = copy.deepcopy(child_tasks)
-        debug("*** Appending subtree.")
+        debug("*** Appending subtree: %s" % repr(task))
         struct.append(copy.deepcopy(task))
+
+        # Grab the next line again because we have returned
+        if len(content):
+          next_line = content[len(content)-1].rstrip("\n").rstrip("\r")
+        else:
+          next_line = ''
       elif indent(next_line) < depth:
-        # If the indent is less than where we were called from, return to the previous iteration.
-        debug("*** Next line is a parent, return from %i." % linenum)
         struct.append(copy.deepcopy(task))
-        return [struct, linenum]
-      else:
+      elif indent(next_line) == depth:
         # Otherwise, append as a sibling on the current structure.
         struct.append(copy.deepcopy(task))
         debug("*** Next line is a sibling (%i), append current item." % depth)
     elif indent(next_line) < depth:
       struct.append(copy.deepcopy(task))
-      debug("*** Next line is a parent (non-task), commit the current item.")
+      debug("*** Next line is a parent (non-task), commit the current item. (%i)" % depth)
 
+    if indent(next_line) < depth:
+      # If the indent is less than where we were called from, return to the previous iteration.
+      debug("*** Next line is a parent, return from %i. (%i)" % (linenum, depth))
+      #struct.append(copy.deepcopy(task))
+      return [struct, linenum]
+
+  debug("<-- Returning from %i." % linenum)
   return [struct, linenum]
 
 def stats(tasks, total=0):
   total_duration = 0
   for task in tasks:
-    task_duration = 0
+    task['duration'] = 0
+    task['total_duration'] = 0
     if task.has_key('intervals'):
       for interval in task['intervals']:
         if(interval.has_key('start') and interval.has_key('end')):
-          task_duration += int(interval['end'] - interval['start'])
-      total_duration += task_duration
-    task['duration'] = task_duration
+          task['duration'] += int(interval['end'] - interval['start'])
+      total_duration += task['duration']
+
     if task.has_key('tasks') and len(task['tasks']):
-      task['child_duration'] = stats(task['tasks'])
+      task['total_duration'] += stats(task['tasks'])
+
+    total_duration += task['total_duration']
 
   return total_duration
 
@@ -180,11 +193,13 @@ def render(tasks, args, depth=0):
     text = textwrap.wrap(task['text'], 75, initial_indent='- ', subsequent_indent='  ')
     for line in text:
       print ("  " * depth) + line
-    if not task.has_key('child_duration') or not args.totals:
-      if task.has_key('duration'):
-        print ("  " * (depth+1)) + '* Duration %s' % str(datetime.timedelta(seconds=task['duration']))
-    if task.has_key('child_duration'):
-      print ("  " * (depth+1)) + '* Sub-tasks duration %s' % str(datetime.timedelta(seconds=task['child_duration']))
+    #if not task.has_key('child_duration') or not args.totals:
+    if task.has_key('total_duration') and task['total_duration'] > 0:
+      print ("  " * (depth+1)) + '* Total duration %s' % str(datetime.timedelta(seconds=task['total_duration']))
+    if task.has_key('duration') and task['duration'] > 0:
+      print ("  " * (depth+1)) + '* Duration %s' % str(datetime.timedelta(seconds=task['duration']))
+    #if task.has_key('child_duration'):
+    #  print ("  " * (depth+1)) + '* Sub-tasks duration %s' % str(datetime.timedelta(seconds=task['child_duration']))
     if task.has_key('tasks') and len(task['tasks']):
       render(task['tasks'], args, depth+1)
 
