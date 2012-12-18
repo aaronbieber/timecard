@@ -1,17 +1,52 @@
 #!/usr/bin/env python
 
-import sys, os, re
+# Timecard v0.1
+#
+# Aaron Bieber, January 2012
+#
+# Timecard is a script for calculating the durations of tasks that you have
+# recorded using Aaron's lightweight task management Vim plugin, Quicktask.
+#
+# http://github.com/aaronbieber/timecard
+# http://quicktask.aaronbieber.com
+#
+# Timecard has no license or warranty expressed or implied. Do whatever
+# you want with it.
+
+import sys, os, re, time, datetime, copy, textwrap
 
 try:
   import argparse
 except ImportError:
   print "You need the argparse library to run timecard."
+  print "Try 'pip install argparse'"
+  sys.exit(1)
+
+try:
+  import dateutil.parser
+except ImportError:
+  print "You need python-dateutil to run timecard."
+  print "For Python >= 3.0, try 'pip install python-dateutil'"
+  print "For Python < 3.0, try 'pip install python-dateutil==1.5'"
+  sys.exit(1)
+
+# Globals
+args = {}
 
 def getargs():
   """ Get the command line arguments.
   """
   parser = argparse.ArgumentParser(description = 'Timecard calculates task statistics using a Quicktask list.')
-  parser.add_argument('-f', '--file', dest='file', help = 'A Quicktask file (filename or a path to the file).')
+  parser.add_argument('-f', '--file', dest='file',
+                      help = 'A Quicktask file (filename or a path to the file).')
+  parser.add_argument('-d', '--done', dest='done', action='store_true', 
+                      help = 'Only calculate the duration of tasks marked as DONE.')
+  parser.add_argument('-z', '--hide-zeros', dest='zero', action='store_true', 
+                      help = 'Only output tasks with durations greater than zero.')
+  parser.add_argument('-t', '--totals-only', dest='totals', action='store_true', 
+                      help = 'When a task has sub-tasks, suppress the display of the task\'s own duration and display only the total duration of all sub-tasks.')
+  parser.add_argument('--debug', dest='debug', action='store_true',
+                      help = 'Display (occasionally) helpful debugging information.')
 
   args = parser.parse_args()
   if not args.file:
@@ -25,10 +60,154 @@ def indent(string):
     m = re.match('^(\s*)', string)
     return len(m.group(1))
 
+def debug(message):
+  if args.debug:
+    print message
+
+def store(content, depth=0, linenum=0):
+  struct = []
+  task = {}
+
+  while len(content):
+    linenum += 1
+    # Non-destructive line value
+    line = content[len(content)-1].rstrip("\n").rstrip("\r")
+    debug("%02i  %s" % (linenum, line.strip()))
+
+    # Skip comments and blank lines
+    if re.match('^\s*#', line) or not len(line):
+      debug("  ~ Skip comment or blank")
+      content.pop()
+      continue
+
+    # Destructive line value
+    line = content.pop().rstrip("\n").rstrip("\r")
+
+    # Look for data.
+    if re.match('^\s*- ', line):
+      task = {'done': False}
+      depth = indent(line)
+      t = re.search('^\s*- (.*)$', line)
+      task['text'] = t.group(1)
+      debug("    - New task line: %s" % task['text'])
+    elif re.match('^.*:$', line):
+      task = {'done': False}
+      depth = indent(line)
+      t = re.search('^\s*(.*):$', line)
+      task['text'] = t.group(1)
+      debug("    : New section task: %s" % task['text'])
+    elif re.match('^\s*\* Added \[... \d{4}-\d\d-\d\d\]', line):
+      added = re.search('.*?Added \[(.*?)\]', line).group(1)
+      task['added'] = time.mktime(dateutil.parser.parse(added).timetuple())
+      debug("    * Added: %i" % task['added'])
+    elif re.match('^\s*\* Start \[... \d{4}-\d\d-\d\d\] \[\d\d:\d\d\]', line):
+      interval = {}
+      start = re.search('^\s*\* Start \[(... \d{4}-\d\d-\d\d)\] \[(\d\d:\d\d)\]', line)
+      interval['start'] = time.mktime(dateutil.parser.parse(start.group(1)+" "+start.group(2)).timetuple())
+      if re.match('^.*, end \[', line):
+        end = re.search('^.*?, end \[(.*?)\]', line)
+        interval['end'] = time.mktime(dateutil.parser.parse(start.group(1)+" "+end.group(1)).timetuple())
+      if not task.has_key('intervals'):
+        task['intervals'] = []
+      task['intervals'].append(interval)
+      debug("    * Interval: %s" % repr(interval))
+    elif re.match('^\s*\* DONE', line):
+      task['done'] = True
+      debug("    * DONE")
+    elif not re.match('^\s*\* ', line) \
+         and task.has_key('text') \
+         and len(task['text']) \
+         and indent(line) == depth + 2:
+      task['text'] += line.strip()
+      debug("    - Additional task text: %s" % line.strip())
+
+    # Grab the next line
+    if len(content):
+      next_line = content[len(content)-1].rstrip("\n").rstrip("\r")
+    else:
+      next_line = ''
+
+    if not task.has_key('text') or not len(task['text']):
+      continue
+
+    # If the next line is at this indent or deeper AND it is a TASK, we will recurse.
+    if re.match('^\s*- ', next_line) or re.match('^.*:$', next_line):
+      debug("*** The next line is a task (%i)" % depth)
+      if indent(next_line) > depth:
+        # If the next line is going to be a child, we must recurse.
+        debug("*** The next line is a child, descending to next function call from line %i. (%i)" % (linenum, depth))
+        child_tasks, linenum = store(content, indent(next_line), linenum) 
+        debug("*** Returned from call at line %i with %i tasks. (%i)" % (linenum, len(child_tasks), depth))
+        task['tasks'] = copy.deepcopy(child_tasks)
+        debug("*** Appending subtree: %s" % repr(task))
+        struct.append(copy.deepcopy(task))
+
+        # Grab the next line again because we have returned
+        if len(content):
+          next_line = content[len(content)-1].rstrip("\n").rstrip("\r")
+        else:
+          next_line = ''
+      elif indent(next_line) < depth:
+        struct.append(copy.deepcopy(task))
+      elif indent(next_line) == depth:
+        # Otherwise, append as a sibling on the current structure.
+        struct.append(copy.deepcopy(task))
+        debug("*** Next line is a sibling (%i), append current item." % depth)
+    elif indent(next_line) < depth:
+      struct.append(copy.deepcopy(task))
+      debug("*** Next line is a parent (non-task), commit the current item. (%i)" % depth)
+
+    if indent(next_line) < depth:
+      # If the indent is less than where we were called from, return to the previous iteration.
+      debug("*** Next line is a parent, return from %i. (%i)" % (linenum, depth))
+      #struct.append(copy.deepcopy(task))
+      return [struct, linenum]
+
+  debug("<-- Returning from %i." % linenum)
+  return [struct, linenum]
+
+def stats(tasks, total=0):
+  total_duration = 0
+  for task in tasks:
+    task['duration'] = 0
+    task['total_duration'] = 0
+    if task.has_key('intervals'):
+      for interval in task['intervals']:
+        if(interval.has_key('start') and interval.has_key('end')):
+          task['duration'] += int(interval['end'] - interval['start'])
+      total_duration += task['duration']
+
+    if task.has_key('tasks') and len(task['tasks']):
+      task['total_duration'] += stats(task['tasks'])
+
+    total_duration += task['total_duration']
+
+  return total_duration
+
+def render(tasks, args, depth=0):
+  for task in tasks:
+    if (not task['done'] and args.done) or \
+       args.zero and ((not task.has_key('duration') or not task['duration']) and \
+                      (not task.has_key('child_duration') or not task['child_duration'])):
+      continue
+    text = textwrap.wrap(task['text'], 75, initial_indent='- ', subsequent_indent='  ')
+    for line in text:
+      print ("  " * depth) + line
+    #if not task.has_key('child_duration') or not args.totals:
+    if task.has_key('total_duration') and task['total_duration'] > 0:
+      print ("  " * (depth+1)) + '* Total duration %s' % str(datetime.timedelta(seconds=task['total_duration']))
+    if task.has_key('duration') and task['duration'] > 0:
+      print ("  " * (depth+1)) + '* Duration %s' % str(datetime.timedelta(seconds=task['duration']))
+    #if task.has_key('child_duration'):
+    #  print ("  " * (depth+1)) + '* Sub-tasks duration %s' % str(datetime.timedelta(seconds=task['child_duration']))
+    if task.has_key('tasks') and len(task['tasks']):
+      render(task['tasks'], args, depth+1)
+
 def main():
   """ The main module for the script.
   """
   # Get the arguments.
+  global args
   args = getargs()
 
   # Check for the file.
@@ -39,18 +218,10 @@ def main():
   with open(args.file) as f:
     content = f.readlines()
 
-  tasklist = []
-  level = 0
-  for line in content:
-    l = line.rstrip("\n").rstrip("\r")
-    new_level = indent(l)
-
-    if new_level > level:
-      pass
-      # We have encountered a sub-item.
-
-    # This is our new level.
-    level = new_level
+  content.reverse()
+  tasks, linenum = store(content)
+  stats(tasks)
+  render(tasks, args)
 
 if __name__ == "__main__":
   main()
