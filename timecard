@@ -45,7 +45,8 @@ def main():
     l = line.rstrip("\n").rstrip("\r")
     new_level = indent(l)
 
-    if new_level > level
+    if new_level > level:
+      pass
       # We have encountered a sub-item.
 
     # This is our new level.
