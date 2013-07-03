@@ -96,13 +96,13 @@ def store(content, depth=0, linenum=0):
       t = re.search('^\s*(.*):$', line)
       task['text'] = t.group(1)
       debug("    : New section task: %s" % task['text'])
-    elif re.match('^\s*\* Added \[... \d{4}-\d\d-\d\d\]', line):
+    elif re.match('^\s*@ Added \[... \d{4}-\d\d-\d\d\]', line):
       added = re.search('.*?Added \[(.*?)\]', line).group(1)
       task['added'] = time.mktime(dateutil.parser.parse(added).timetuple())
       debug("    * Added: %i" % task['added'])
-    elif re.match('^\s*\* Start \[... \d{4}-\d\d-\d\d\] \[\d\d:\d\d\]', line):
+    elif re.match('^\s*@ Start \[... \d{4}-\d\d-\d\d\] \[\d\d:\d\d\]', line):
       interval = {}
-      start = re.search('^\s*\* Start \[(... \d{4}-\d\d-\d\d)\] \[(\d\d:\d\d)\]', line)
+      start = re.search('^\s*@ Start \[(... \d{4}-\d\d-\d\d)\] \[(\d\d:\d\d)\]', line)
       interval['start'] = time.mktime(dateutil.parser.parse(start.group(1)+" "+start.group(2)).timetuple())
       if re.match('^.*, end \[', line):
         end = re.search('^.*?, end \[(.*?)\]', line)
@@ -111,7 +111,7 @@ def store(content, depth=0, linenum=0):
         task['intervals'] = []
       task['intervals'].append(interval)
       debug("    * Interval: %s" % repr(interval))
-    elif re.match('^\s*\* DONE', line):
+    elif re.match('^\s*@ DONE', line):
       task['done'] = True
       debug("    * DONE")
     elif not re.match('^\s*\* ', line) \
